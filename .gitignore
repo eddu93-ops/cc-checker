@@ -1,0 +1,23 @@
+Archivos de datos y cache
+*.db
+*.txt
+*.json
+.csv
+bin_cache.db
+cc_results_
+
+Logs y temporales
+*.log
+*.tmp
+pycache/
+*.pyc
+
+Configuraciones sensibles
+config.ini
+.env
+*.key
+
+Sistema
+.DS_Store
+Thumbs.db
+
