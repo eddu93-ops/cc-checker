@@ -612,3 +612,4 @@ class SecureCCChecker:
 if __name__ == "__main__":
     checker = SecureCCChecker()
     checker.run()
+
